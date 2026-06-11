@@ -1,6 +1,10 @@
 # BSIM Excel Export
 
-Generates a formatted Excel file from BSIM webapp export data. Two sheets: Goal Seek (break even analysis) and Data Table (price x quantity sensitivity).
+Generates a formatted Excel file from BSIM webapp export data. Two sheets: Goal Seek (break even analysis) and Data Table (three sensitivity tables: Price x Quantity, Cost x Quantity, Price x Cost).
+
+## Warning
+
+Do not run `bsim_export.py` directly. Do not edit it either. The only file you touch is `run.py`. Open it, update the 4 input values, and call `export_bsim_excel` — that is it.
 
 ## How to run locally
 
