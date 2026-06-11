@@ -4,7 +4,9 @@ Generates a formatted Excel file from BSIM webapp export data. Two sheets: Goal 
 
 ## Warning
 
-Do not run `bsim_export.py` directly. Do not edit it either. The only file you touch is `run.py`. Open it, update the 4 input values, and call `export_bsim_excel` — that is it.
+Do not run `bsim_export.py` directly. Do not edit it either. 
+
+To run, the only file you touch is `run.py`. Open it, update the 4 input values, and call `export_bsim_excel` that is it.
 
 ## How to run locally
 
