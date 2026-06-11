@@ -1,4 +1,5 @@
 /data
 
-
 __pycache__/
+.DS_Store
+BSIM_Export_Test.xlsx
