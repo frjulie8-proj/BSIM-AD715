@@ -514,3 +514,4 @@ def export_bsim_excel(fixed_cost, var_cost, avg_price, qty_actual, output_path,
 
     wb.save(output_path)
     print(f"Saved: {output_path}")
+
