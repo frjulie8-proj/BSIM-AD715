@@ -14,6 +14,9 @@ from bsim_export import (
     write_instructions,
     generate_sensitivity_table,
     generate_goal_seek,
+    generate_table_price_qty,
+    generate_table_cost_qty,
+    generate_table_price_cost,
     generate_data_table,
     export_bsim_excel,
 )
@@ -58,21 +61,30 @@ def test_write_inputs():
     print("\n[3] write_inputs")
     ws = Workbook().active
     inputs = [
-        ("Fixed Cost", 441002.73, "$#,##0.00", "note A"),
-        ("Var Cost",   0.92,      "$#,##0.00", None),
-        ("Avg Price",  3.62,      "$#,##0.00", "note C"),
+        ("fixed", "Fixed Cost", 441002.73, "$#,##0.00", "note A"),
+        ("var",   "Var Cost",   0.92,      "$#,##0.00", None),
+        ("avg",   "Avg Price",  3.62,      "$#,##0.00", "note C"),
     ]
     next_row, input_rows = write_inputs(ws, start_row=1, inputs=inputs)
 
-    check("returns 3 input row numbers",          len(input_rows) == 3)
-    check("first input row is 2 (row 1 = label)", input_rows[0] == 2)
-    check("input rows are consecutive",           input_rows == [2, 3, 4])
-    check("next_row skips blank (row 6)",         next_row == 6)
-    check("B2 has fixed cost value",              ws.cell(2, 2).value == 441002.73)
-    check("B3 has var cost value",                ws.cell(3, 2).value == 0.92)
-    check("B4 has avg price value",               ws.cell(4, 2).value == 3.62)
-    check("C2 has note",                          ws.cell(2, 3).value == "note A")
-    check("C3 note is None (no note passed)",     ws.cell(3, 3).value is None)
+    check("returns a dict",                         isinstance(input_rows, dict))
+    check("dict has 3 keys",                        len(input_rows) == 3)
+    check("key 'fixed' resolves to row 2",          input_rows["fixed"] == 2)
+    check("key 'var' resolves to row 3",            input_rows["var"]   == 3)
+    check("key 'avg' resolves to row 4",            input_rows["avg"]   == 4)
+    check("next_row skips blank (row 6)",           next_row == 6)
+    check("B2 has fixed cost value",                ws.cell(2, 2).value == 441002.73)
+    check("B3 has var cost value",                  ws.cell(3, 2).value == 0.92)
+    check("B4 has avg price value",                 ws.cell(4, 2).value == 3.62)
+    check("C2 has note",                            ws.cell(2, 3).value == "note A")
+    check("C3 note is None (no note passed)",       ws.cell(3, 3).value is None)
+
+    # Reorder safety: reversing the list must not break key resolution
+    ws2 = Workbook().active
+    inputs_reversed = list(reversed(inputs))
+    _, ir2 = write_inputs(ws2, start_row=1, inputs=inputs_reversed)
+    check("reorder: 'avg' still resolves correctly", ws2.cell(ir2["avg"], 2).value == 3.62)
+    check("reorder: 'fixed' still resolves correctly", ws2.cell(ir2["fixed"], 2).value == 441002.73)
 
 
 # ── Test 4: write_instructions ────────────────────────────────────────────────
@@ -103,9 +115,76 @@ def test_generate_goal_seek():
     check("sheet has content past row 10", ws.cell(10, 1).value is not None)
 
 
-# ── Test 6: generate_data_table ───────────────────────────────────────────────
+# ── Test 6: generate_table_price_qty ─────────────────────────────────────────
+def test_generate_table_price_qty():
+    print("\n[6] generate_table_price_qty")
+    ws = Workbook().active
+    _, input_rows = write_inputs(ws, start_row=1, inputs=[
+        ("fixed", "Fixed Cost", 441002.73, "$#,##0.00", None),
+        ("var",   "Var Cost",   0.92,      "$#,##0.00", None),
+        ("avg",   "Avg Price",  3.62,      "$#,##0.00", None),
+        ("qty",   "Qty",        405480,    "#,##0",     None),
+    ])
+    ws2 = Workbook().active
+    next_row = generate_table_price_qty(ws2, start_row=1,
+                                        input_rows=input_rows,
+                                        avg_price=3.62,
+                                        qty_actual=405480,
+                                        n_steps=3, pct=0.10)
+    check("returns a row > 1",                       next_row > 1)
+    check("corner cell has formula starting with =", str(ws2.cell(1, 1).value).startswith("="))
+    check("7 column headers in corner row",          ws2.cell(1, 2).value is not None)
+    check("first data cell is blank (light blue)",   ws2.cell(2, 2).value is None)
+
+
+# ── Test 7: generate_table_cost_qty ──────────────────────────────────────────
+def test_generate_table_cost_qty():
+    print("\n[7] generate_table_cost_qty")
+    ws = Workbook().active
+    _, input_rows = write_inputs(ws, start_row=1, inputs=[
+        ("fixed", "Fixed Cost", 441002.73, "$#,##0.00", None),
+        ("var",   "Var Cost",   0.92,      "$#,##0.00", None),
+        ("avg",   "Avg Price",  3.62,      "$#,##0.00", None),
+        ("qty",   "Qty",        405480,    "#,##0",     None),
+    ])
+    ws2 = Workbook().active
+    next_row = generate_table_cost_qty(ws2, start_row=1,
+                                       input_rows=input_rows,
+                                       var_cost=0.92,
+                                       qty_actual=405480,
+                                       n_steps=3, pct=0.10)
+    check("returns a row > 1",                       next_row > 1)
+    check("corner cell has formula starting with =", str(ws2.cell(1, 1).value).startswith("="))
+    check("7 column headers in corner row",          ws2.cell(1, 2).value is not None)
+    check("first data cell is blank (light blue)",   ws2.cell(2, 2).value is None)
+    check("row header is a cost value near 0.92",    ws2.cell(2, 1).value is not None)
+
+
+# ── Test 8: generate_table_price_cost ────────────────────────────────────────
+def test_generate_table_price_cost():
+    print("\n[8] generate_table_price_cost")
+    ws = Workbook().active
+    _, input_rows = write_inputs(ws, start_row=1, inputs=[
+        ("fixed", "Fixed Cost", 441002.73, "$#,##0.00", None),
+        ("var",   "Var Cost",   0.92,      "$#,##0.00", None),
+        ("avg",   "Avg Price",  3.62,      "$#,##0.00", None),
+        ("qty",   "Qty",        405480,    "#,##0",     None),
+    ])
+    ws2 = Workbook().active
+    next_row = generate_table_price_cost(ws2, start_row=1,
+                                         input_rows=input_rows,
+                                         avg_price=3.62,
+                                         var_cost=0.92,
+                                         n_steps=3, pct=0.10)
+    check("returns a row > 1",                       next_row > 1)
+    check("corner cell has formula starting with =", str(ws2.cell(1, 1).value).startswith("="))
+    check("7 column headers in corner row",          ws2.cell(1, 2).value is not None)
+    check("first data cell is blank (light blue)",   ws2.cell(2, 2).value is None)
+
+
+# ── Test 9: generate_data_table ───────────────────────────────────────────────
 def test_generate_data_table():
-    print("\n[6] generate_data_table")
+    print("\n[9] generate_data_table")
     ws = Workbook().active
     next_row = generate_data_table(ws, start_row=1,
                                    fixed_cost=441002.73,
@@ -115,15 +194,15 @@ def test_generate_data_table():
                                    n_steps=3, pct=0.10)
     check("returns a row number > 1",            next_row > 1)
     check("A1 has sensitivity title",            "Sensitivity" in str(ws.cell(1, 1).value))
-    check("corner formula is present on sheet",  any(
+    check("corner formula present on sheet",     any(
         str(ws.cell(r, 1).value or "").startswith("=")
         for r in range(1, next_row)
     ))
 
 
-# ── Test 7: export_bsim_excel (full integration) ──────────────────────────────
+# ── Test 10: export_bsim_excel (full integration) ────────────────────────────
 def test_export_bsim_excel():
-    print("\n[7] export_bsim_excel (integration)")
+    print("\n[10] export_bsim_excel (integration)")
     out = "test_output.xlsx"
     export_bsim_excel(
         fixed_cost=441002.73,
@@ -157,6 +236,9 @@ if __name__ == "__main__":
         test_write_inputs,
         test_write_instructions,
         test_generate_goal_seek,
+        test_generate_table_price_qty,
+        test_generate_table_cost_qty,
+        test_generate_table_price_cost,
         test_generate_data_table,
         test_export_bsim_excel,
     ]

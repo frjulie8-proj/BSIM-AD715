@@ -7,7 +7,7 @@ from bsim_export import export_bsim_excel
 # qty_actual : Total Quantity Sold FY1
 
 export_bsim_excel(
-    fixed_cost=111111,
+    fixed_cost=999999,
     var_cost=0.92,
     avg_price=3.62,
     qty_actual=2344334,

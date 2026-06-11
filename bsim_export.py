@@ -5,10 +5,10 @@ Generates a BSIM Scenario Analysis Excel file from webapp export data.
 
 Usage:
     export_bsim_excel(
-        fixed_cost=123436,
+        fixed_cost=441002.73,
         var_cost=0.92,
         avg_price=3.62,
-        qty_actual=123123,
+        qty_actual=405480,
         output_path="BSIM_Output.xlsx"
     )
 """
@@ -18,14 +18,16 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 # ── Shared styles ─────────────────────────────────────────────────────────────
-FONT_NAME  = "Arial"
-NAVY       = "2E4057"
-BLUE       = "4A90D9"
-YELLOW     = "FFFF00"
-LIGHT_BLUE = "EBF3FB"
-GRAY       = "F5F5F5"
-GREEN_BG   = "D4EFDF"
-RED_BG     = "FADBD8"
+FONT_NAME       = "Arial"
+NAVY            = "2E4057"
+BLUE            = "4A90D9"
+YELLOW          = "FFFF00"
+LIGHT_BLUE      = "EBF3FB"
+GRAY            = "F5F5F5"
+GREEN_BG        = "D4EFDF"
+RED_BG          = "FADBD8"
+COL_WIDTH_LABEL = 28   # Fix 2: shared constant — both sheets use this
+COL_WIDTH_VALUE = 16   # Fix 2: shared constant — both sheets use this
 
 def _thin_border():
     s = Side(style="thin", color="CCCCCC")
@@ -48,7 +50,6 @@ def _style(cell, value, font, fill, align, border, fmt=None):
     cell.border = border
     if fmt:
         cell.number_format = fmt
-
 
 
 # ── Function 0a: write_header ─────────────────────────────────────────────────
@@ -106,8 +107,9 @@ def write_instructions(ws, start_row, title, steps):
 def write_inputs(ws, start_row, inputs):
     """
     Writes a labelled INPUTS section.
-    inputs: list of (label, value, fmt, note)
-    Returns (next_row, list_of_input_rows) — row numbers for formula references.
+    inputs: list of (key, label, value, fmt, note)
+    Returns (next_row, dict) — dict keyed by 'key' for safe formula references.
+    Reorder-safe: the key travels with its data row, no positional assumptions.
     """
     border  = _thin_border()
     blue_in = _font(color="0000FF", size=11)
@@ -116,20 +118,20 @@ def write_inputs(ws, start_row, inputs):
 
     # Section label
     ws.merge_cells(f"A{start_row}:C{start_row}")
-    _style(ws.cell(start_row, 1), "INPUTS",
+    _style(ws.cell(start_row, 1), "INPUTS  (blue = hardcoded, change to test scenarios)",
            _font(bold=True, color="FFFFFF", size=11),
            _fill(BLUE), _align(), border)
     row = start_row + 1
 
-    input_rows = []
-    for label, val, fmt, note in inputs:
+    input_rows = {}
+    for key, label, val, fmt, note in inputs:
         _style(ws.cell(row, 1), label, navy_b,  _fill(GRAY),   _align(h="left"), border)
         _style(ws.cell(row, 2), val,   blue_in, _fill(YELLOW), _align(),         border, fmt)
         if note:
             ws.cell(row, 3).value     = note
             ws.cell(row, 3).font      = gray_sm
             ws.cell(row, 3).alignment = _align(h="left")
-        input_rows.append(row)
+        input_rows[key] = row
         row += 1
 
     return row + 1, input_rows  # +1 blank row gap
@@ -221,9 +223,9 @@ def generate_goal_seek(ws, start_row, fixed_cost, var_cost, avg_price, qty_actua
     navy_b  = _font(bold=True, color=NAVY, size=11)
     gray_sm = _font(color="888888", size=9, italic=True)
 
-    # Column widths
-    ws.column_dimensions["A"].width = 32
-    ws.column_dimensions["B"].width = 20
+    # Column widths — Fix 2: use shared constants
+    ws.column_dimensions["A"].width = COL_WIDTH_LABEL
+    ws.column_dimensions["B"].width = COL_WIDTH_VALUE
     ws.column_dimensions["C"].width = 30
 
     # Header
@@ -233,13 +235,12 @@ def generate_goal_seek(ws, start_row, fixed_cost, var_cost, avg_price, qty_actua
         "Source: 36 Month Pro Forma — FY1 Data  |  AD715 BSIM Project"
     )
 
-    # Inputs
-    row, input_rows = write_inputs(ws, row, [
-        ("Total Fixed Cost FY1 ($)",     fixed_cost, "$#,##0.00", None),
-        ("Variable Cost per Pint ($)",   var_cost,   "$#,##0.00", None),
-        ("Average Revenue per Pint ($)", avg_price,  "$#,##0.00", None),
+    # Inputs — Fix 1: key-based tuples, dict return
+    row, ir = write_inputs(ws, row, [
+        ("fixed", "Total Fixed Cost FY1 ($)",     fixed_cost, "$#,##0.00", None),
+        ("var",   "Variable Cost per Pint ($)",   var_cost,   "$#,##0.00", None),
+        ("avg",   "Average Revenue per Pint ($)", avg_price,  "$#,##0.00", None),
     ])
-    r_fixed, r_var, r_avg = input_rows
 
     # Section label: CALCULATIONS
     ws.merge_cells(f"A{row}:C{row}")
@@ -259,14 +260,14 @@ def generate_goal_seek(ws, start_row, fixed_cost, var_cost, avg_price, qty_actua
     r_np   = row + 7
 
     calcs = [
-        ("Total Quantity Sold (pints)", qty_actual,                         "#,##0",     GREEN_BG,   "← Change this cell in Goal Seek (green)"),
-        ("Total Revenue ($)",           f"=B{r_avg}*B{r_qty}",             "$#,##0.00", LIGHT_BLUE, "Avg Price x Quantity"),
-        ("Total Variable Cost ($)",     f"=B{r_var}*B{r_qty}",             "$#,##0.00", LIGHT_BLUE, "Var Cost x Quantity"),
-        ("Total Contribution ($)",      f"=B{r_rev}-B{r_vc}",              "$#,##0.00", LIGHT_BLUE, "Revenue minus Variable Cost"),
-        ("Total Fixed Cost ($)",        f"=B{r_fixed}",                    "$#,##0.00", LIGHT_BLUE, "From inputs above"),
-        ("Gross Profit ($)",            f"=B{r_cont}-B{r_fc}",             "$#,##0.00", RED_BG,     "← Set this to 0 in Goal Seek (red)"),
-        ("Tax (21%)",                   f"=IF(B{r_gp}>0,B{r_gp}*0.21,0)", "$#,##0.00", LIGHT_BLUE, ""),
-        ("Net Profit ($)",              f"=B{r_gp}-B{r_tax}",              "$#,##0.00", LIGHT_BLUE, ""),
+        ("Total Quantity Sold (pints)", qty_actual,                                 "#,##0",     GREEN_BG,   "← Change this cell in Goal Seek (green)"),
+        ("Total Revenue ($)",           f"=B{ir['avg']}*B{r_qty}",            "$#,##0.00", LIGHT_BLUE, "Avg Price x Quantity"),
+        ("Total Variable Cost ($)",     f"=B{ir['var']}*B{r_qty}",            "$#,##0.00", LIGHT_BLUE, "Var Cost x Quantity"),
+        ("Total Contribution ($)",      f"=B{r_rev}-B{r_vc}",                 "$#,##0.00", LIGHT_BLUE, "Revenue minus Variable Cost"),
+        ("Total Fixed Cost ($)",        f"=B{ir['fixed']}",                   "$#,##0.00", LIGHT_BLUE, "From inputs above"),
+        ("Gross Profit ($)",            f"=B{r_cont}-B{r_fc}",                "$#,##0.00", RED_BG,     "← Set this to 0 in Goal Seek (red)"),
+        ("Tax (21%)",                   f"=IF(B{r_gp}>0,B{r_gp}*0.21,0)",   "$#,##0.00", LIGHT_BLUE, ""),
+        ("Net Profit ($)",              f"=B{r_gp}-B{r_tax}",                 "$#,##0.00", LIGHT_BLUE, ""),
     ]
 
     for label, val, fmt, bg, note in calcs:
@@ -292,23 +293,146 @@ def generate_goal_seek(ws, start_row, fixed_cost, var_cost, avg_price, qty_actua
     return row
 
 
+# ── Function 4a: generate_table_price_qty ────────────────────────────────────
+def generate_table_price_qty(ws, start_row, input_rows, avg_price, qty_actual,
+                              n_steps=3, pct=0.10):
+    """
+    Table 1: Price x Quantity.
+    Rows = price series, Columns = qty series.
+    Variable cost and fixed cost held at actual values from shared inputs.
+    input_rows: dict returned by write_inputs — keyed by name, reorder-safe.
+    """
+    r_fixed = input_rows["fixed"]
+    r_var   = input_rows["var"]
+    r_avg   = input_rows["avg"]
+    r_qty   = input_rows["qty"]
+
+    qty_series   = generate_series(qty_actual, n_steps, pct)
+    price_series = generate_series(avg_price,  n_steps, pct)
+
+    corner_formula = f"=(B{r_avg}-B{r_var})*B{r_qty}-B{r_fixed}"
+    last_data_col  = get_column_letter(len(qty_series) + 1)
+    last_data_row  = start_row + len(price_series)
+
+    steps = [
+        ("Step 1", f"Select table range A{start_row}:{last_data_col}{last_data_row}"),
+        ("Step 2", "Go to Data tab → What-If Analysis → Data Table"),
+        ("Step 3", f"Row input cell: B{r_avg} (Average Revenue per Pint)"),
+        ("Step 4", f"Column input cell: B{r_qty} (Total Quantity Sold)"),
+        ("Step 5", "Click OK — Excel fills all blank cells automatically"),
+        ("Step 6", "Find the row matching your price and read across to find break even quantity"),
+    ]
+
+    return generate_sensitivity_table(
+        ws, start_row=start_row,
+        corner_formula=corner_formula,
+        col_series=qty_series,
+        row_series=price_series,
+        col_fmt="#,##0",
+        row_fmt="$#,##0.00",
+        instr_title="HOW TO RUN DATA TABLE — Table 1: Price x Quantity",
+        instr_steps=steps
+    )
+
+
+# ── Function 4b: generate_table_cost_qty ─────────────────────────────────────
+def generate_table_cost_qty(ws, start_row, input_rows, var_cost, qty_actual,
+                             n_steps=3, pct=0.10):
+    """
+    Table 2: Cost x Quantity.
+    Rows = var_cost series, Columns = qty series.
+    Price and fixed cost held at actual values from shared inputs.
+    input_rows: dict returned by write_inputs — keyed by name, reorder-safe.
+    """
+    r_fixed = input_rows["fixed"]
+    r_var   = input_rows["var"]
+    r_avg   = input_rows["avg"]
+    r_qty   = input_rows["qty"]
+
+    cost_series = generate_series(var_cost,   n_steps, pct)
+    qty_series  = generate_series(qty_actual, n_steps, pct)
+
+    corner_formula = f"=(B{r_avg}-B{r_var})*B{r_qty}-B{r_fixed}"
+    last_data_col  = get_column_letter(len(qty_series) + 1)
+    last_data_row  = start_row + len(cost_series)
+
+    steps = [
+        ("Step 1", f"Select table range A{start_row}:{last_data_col}{last_data_row}"),
+        ("Step 2", "Go to Data tab → What-If Analysis → Data Table"),
+        ("Step 3", f"Row input cell: B{r_var} (Variable Cost per Pint — varies down rows)"),
+        ("Step 4", f"Column input cell: B{r_qty} (Total Quantity Sold — varies across columns)"),
+        ("Step 5", "Click OK — Excel fills all blank cells automatically"),
+        ("Step 6", "Find the row matching your cost and read across to see how quantity affects profit"),
+    ]
+
+    return generate_sensitivity_table(
+        ws, start_row=start_row,
+        corner_formula=corner_formula,
+        col_series=qty_series,
+        row_series=cost_series,
+        col_fmt="#,##0",
+        row_fmt="$#,##0.00",
+        instr_title="HOW TO RUN DATA TABLE — Table 2: Cost x Quantity",
+        instr_steps=steps
+    )
+
+
+# ── Function 4c: generate_table_price_cost ───────────────────────────────────
+def generate_table_price_cost(ws, start_row, input_rows, avg_price, var_cost,
+                               n_steps=3, pct=0.10):
+    """
+    Table 3: Price x Cost.
+    Rows = var_cost series, Columns = price series.
+    Quantity and fixed cost held at actual values from shared inputs.
+    input_rows: dict returned by write_inputs — keyed by name, reorder-safe.
+    """
+    r_fixed = input_rows["fixed"]
+    r_var   = input_rows["var"]
+    r_avg   = input_rows["avg"]
+    r_qty   = input_rows["qty"]
+
+    price_series = generate_series(avg_price, n_steps, pct)
+    cost_series  = generate_series(var_cost,  n_steps, pct)
+
+    corner_formula = f"=(B{r_avg}-B{r_var})*B{r_qty}-B{r_fixed}"
+    last_data_col  = get_column_letter(len(price_series) + 1)
+    last_data_row  = start_row + len(cost_series)
+
+    steps = [
+        ("Step 1", f"Select table range A{start_row}:{last_data_col}{last_data_row}"),
+        ("Step 2", "Go to Data tab → What-If Analysis → Data Table"),
+        ("Step 3", f"Row input cell: B{r_var} (Variable Cost per Pint)"),
+        ("Step 4", f"Column input cell: B{r_avg} (Average Revenue per Pint)"),
+        ("Step 5", "Click OK — Excel fills all blank cells automatically"),
+        ("Step 6", "Find the intersection where margin is healthiest given your cost structure"),
+    ]
+
+    return generate_sensitivity_table(
+        ws, start_row=start_row,
+        corner_formula=corner_formula,
+        col_series=price_series,
+        row_series=cost_series,
+        col_fmt="$#,##0.00",
+        row_fmt="$#,##0.00",
+        instr_title="HOW TO RUN DATA TABLE — Table 3: Price x Cost",
+        instr_steps=steps
+    )
+
+
 # ── Function 4: generate_data_table ──────────────────────────────────────────
 def generate_data_table(ws, start_row, fixed_cost, var_cost, avg_price, qty_actual,
                         n_steps=3, pct=0.10):
     """
     Writes the full Data Table - Sensitivity sheet.
-    Currently contains Table 1: Price x Quantity.
-    Future tables (Cost x Qty, Price x Cost) will be appended below.
-    All series use percentage-based increments (pct of midpoint).
+    Contains Table 1 (Price x Qty), Table 2 (Cost x Qty), Table 3 (Price x Cost)
+    stacked vertically. All series use percentage-based increments.
     Returns next available row after blank gap.
     """
-    # Column widths — A/B/C match Sheet 1, extra cols for sensitivity table
-    ws.column_dimensions["A"].width = 32
-    ws.column_dimensions["B"].width = 20
-    ws.column_dimensions["C"].width = 30
+    # Column widths — Fix 2: use shared constants
+    ws.column_dimensions["A"].width = COL_WIDTH_LABEL
     n_cols = n_steps * 2 + 2
-    for col in range(4, n_cols + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 16
+    for col in range(2, n_cols + 1):
+        ws.column_dimensions[get_column_letter(col)].width = COL_WIDTH_VALUE
 
     # Sheet header
     row = write_header(
@@ -317,48 +441,37 @@ def generate_data_table(ws, start_row, fixed_cost, var_cost, avg_price, qty_actu
         "Source: 36 Month Pro Forma FY1  |  AD715 BSIM Project"
     )
 
-    # Inputs — shared across all tables on this sheet
+    # Inputs — shared across all three tables; Fix 1: key-based tuples, dict return
     row, input_rows = write_inputs(ws, row, [
-        ("Total Fixed Cost FY1 ($)",     fixed_cost, "$#,##0.00", "<- Fixed Cost input"),
-        ("Variable Cost per Pint ($)",   var_cost,   "$#,##0.00", "<- Varies in Price x Cost table"),
-        ("Average Revenue per Pint ($)", avg_price,  "$#,##0.00", "<- Varies in Price tables"),
-        ("Total Quantity Sold (pints)",  qty_actual, "#,##0",     "<- Mid value for Qty series"),
+        ("fixed", "Total Fixed Cost FY1 ($)",     fixed_cost, "$#,##0.00", "<- Fixed Cost input"),
+        ("var",   "Variable Cost per Pint ($)",   var_cost,   "$#,##0.00", "<- Varies in Cost tables"),
+        ("avg",   "Average Revenue per Pint ($)", avg_price,  "$#,##0.00", "<- Varies in Price tables"),
+        ("qty",   "Total Quantity Sold (pints)",  qty_actual, "#,##0",     "<- Mid value for Qty series"),
     ])
-    r_fixed, r_var, r_avg, r_qty = input_rows
 
     # ── Table 1: Price x Quantity ─────────────────────────────────────────────
-    qty_series   = generate_series(qty_actual, n_steps, pct)
-    price_series = generate_series(avg_price,  n_steps, pct)
-
-    corner_formula = f"=(B{r_avg}-B{r_var})*B{r_qty}-B{r_fixed}"
-    last_data_col  = get_column_letter(len(qty_series) + 1)
-    last_data_row  = row + len(price_series)
-
-    steps_pq = [
-        ("Step 1", f"Select table range A{row}:{last_data_col}{last_data_row}"),
-        ("Step 2", "Go to Data tab → What-If Analysis → Data Table"),
-        ("Step 3", f"Row input cell: B{r_avg} (Average Revenue per Pint)"),
-        ("Step 4", f"Column input cell: B{r_qty} (Total Quantity Sold)"),
-        ("Step 5", "Click OK — Excel fills all blank cells automatically"),
-        ("Step 6", "Find the row matching your price and read across to find break even quantity"),
-    ]
-
-    row = generate_sensitivity_table(
-        ws, start_row=row,
-        corner_formula=corner_formula,
-        col_series=qty_series,
-        row_series=price_series,
-        col_fmt="#,##0",
-        row_fmt="$#,##0.00",
-        instr_title="HOW TO RUN DATA TABLE — Table 1: Price x Quantity",
-        instr_steps=steps_pq
+    row = generate_table_price_qty(
+        ws, row,
+        input_rows=input_rows,
+        avg_price=avg_price, qty_actual=qty_actual,
+        n_steps=n_steps, pct=pct
     )
 
-    # ── Placeholder: Table 2 Cost x Quantity (deferred) ──────────────────────
-    # generate_table_cost_qty(ws, row, ...) — to be implemented
+    # ── Table 2: Cost x Quantity ──────────────────────────────────────────────
+    row = generate_table_cost_qty(
+        ws, row,
+        input_rows=input_rows,
+        var_cost=var_cost, qty_actual=qty_actual,
+        n_steps=n_steps, pct=pct
+    )
 
-    # ── Placeholder: Table 3 Price x Cost (deferred) ─────────────────────────
-    # generate_table_price_cost(ws, row, ...) — to be implemented
+    # ── Table 3: Price x Cost ─────────────────────────────────────────────────
+    row = generate_table_price_cost(
+        ws, row,
+        input_rows=input_rows,
+        avg_price=avg_price, var_cost=var_cost,
+        n_steps=n_steps, pct=pct
+    )
 
     return row
 
@@ -401,14 +514,3 @@ def export_bsim_excel(fixed_cost, var_cost, avg_price, qty_actual, output_path,
 
     wb.save(output_path)
     print(f"Saved: {output_path}")
-
-
-# ── Run example ───────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    export_bsim_excel(
-        fixed_cost=441002.73,
-        var_cost=0.92,
-        avg_price=3.62,
-        qty_actual=405480,
-        output_path="/Users/julie/Desktop/Code-project/BSIM Excel export/BSIM_Export_Test.xlsx"
-    )
