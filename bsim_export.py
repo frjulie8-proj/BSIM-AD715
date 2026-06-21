@@ -15,7 +15,12 @@ Usage:
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.axis import ChartLines
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.drawing.line import LineProperties
+from openpyxl.formatting.rule import ColorScaleRule
 
 # ── Shared styles ─────────────────────────────────────────────────────────────
 FONT_NAME       = "Arial"
@@ -137,6 +142,52 @@ def write_inputs(ws, start_row, inputs):
     return row + 1, input_rows  # +1 blank row gap
 
 
+# ── Function 0d: write_recommendation ─────────────────────────────────────────
+def write_recommendation(ws, start_row, anchor_col="E",
+                         title="Business Recommendation", n_body_rows=7, width=3):
+    """
+    Writes a reusable, empty Business Recommendation block to the right of the
+    sheet's data. DRY: same call works on any sheet, only the anchor changes.
+    No content is baked in — the body rows are blank for the user to fill in.
+
+    anchor_col  : left-most column of the block as a letter (e.g. "E", "J")
+    n_body_rows : number of empty wrap-text rows under the title
+    width       : number of columns the block spans
+    Returns next available row after a 1-row gap.
+    """
+    no_border = Border()  # borderless — clean merged block, no interior lines
+    c0 = column_index_from_string(anchor_col)
+    c1 = c0 + width - 1
+    left  = get_column_letter(c0)
+    right = get_column_letter(c1)
+
+    # Widen spanned columns so notes are readable
+    for c in range(c0, c1 + 1):
+        col = get_column_letter(c)
+        if (ws.column_dimensions[col].width or 0) < 18:
+            ws.column_dimensions[col].width = 18
+
+    # Title bar — single merged row, no border
+    for c in range(c0, c1 + 1):
+        _style(ws.cell(start_row, c), title if c == c0 else None,
+               _font(bold=True, color="FFFFFF", size=12), _fill(NAVY),
+               _align(wrap=True), no_border)
+    ws.merge_cells(f"{left}{start_row}:{right}{start_row}")
+    ws.row_dimensions[start_row].height = 28
+
+    # Body — ONE merged block (no interior lines), light fill, free-form notes
+    body_top = start_row + 1
+    body_bot = start_row + n_body_rows
+    for r in range(body_top, body_bot + 1):
+        for c in range(c0, c1 + 1):
+            _style(ws.cell(r, c), None,
+                   _font(color="333333", size=10), _fill(LIGHT_BLUE),
+                   _align(h="left", v="top", wrap=True), no_border)
+    ws.merge_cells(f"{left}{body_top}:{right}{body_bot}")
+
+    return body_bot + 2  # +1 blank row gap
+
+
 # ── Function 1: generate_series ───────────────────────────────────────────────
 def generate_series(midpoint, n_steps, pct=0.10):
     """
@@ -152,6 +203,91 @@ def generate_series(midpoint, n_steps, pct=0.10):
     for i in range(-n_steps, n_steps + 1):
         values.append(round(midpoint + i * increment, 4))
     return values
+
+
+# ── Function 1b: generate_breakeven_series ────────────────────────────────────
+def generate_breakeven_series(qty_actual, n_points=10, frac=1.2):
+    """
+    Returns an ascending quantity axis from 0 up to ~frac*qty_actual,
+    in n_points even steps (n_points+1 values, starting at 0).
+    Scales with the BSIM scenario — never a flat/hardcoded range.
+    """
+    qty_max = round(frac * qty_actual)
+    step = qty_max / n_points
+    return [round(i * step) for i in range(n_points + 1)]
+
+
+# ── Function 1c: generate_breakeven_chart_data ────────────────────────────────
+def generate_breakeven_chart_data(ws, start_row, input_rows, qty_actual,
+                                  n_points=10, frac=1.2, chart_anchor="E"):
+    """
+    Writes the Break Even chart-data table (Quantity | Revenue | Cost) with
+    fully dynamic formulas referencing the shared INPUTS, then draws a line chart.
+    Revenue = avg_price * qty ; Cost = fixed_cost + var_cost * qty.
+    input_rows: dict from write_inputs (keys: fixed, var, avg) — reorder-safe.
+    Returns next available row after a blank gap.
+    """
+    border = _thin_border()
+    navy_b = _font(bold=True, color=NAVY, size=11)
+    black_f = _font(color="000000", size=11)
+
+    r_fixed = input_rows["fixed"]
+    r_var   = input_rows["var"]
+    r_avg   = input_rows["avg"]
+
+    # Section label
+    ws.merge_cells(f"A{start_row}:C{start_row}")
+    _style(ws.cell(start_row, 1), "CHART DATA — Break Even Line Chart",
+           _font(bold=True, color="FFFFFF", size=11),
+           _fill(BLUE), _align(), border)
+
+    # Column headers
+    header_row = start_row + 1
+    for col, label in enumerate(
+            ["Quantity (pints)", "Total Revenue ($)", "Total Cost ($)"], start=1):
+        _style(ws.cell(header_row, col), label,
+               _font(bold=True, color="FFFFFF", size=11),
+               _fill(BLUE), _align(), border)
+
+    # Data rows — qty is a hardcoded axis; revenue/cost are dynamic formulas
+    qty_series = generate_breakeven_series(qty_actual, n_points, frac)
+    first_data_row = header_row + 1
+    r = first_data_row
+    for qty in qty_series:
+        _style(ws.cell(r, 1), qty,                       black_f, _fill(GRAY),       _align(), border, "#,##0")
+        _style(ws.cell(r, 2), f"=B{r_avg}*A{r}",         black_f, _fill(LIGHT_BLUE), _align(), border, "$#,##0")
+        _style(ws.cell(r, 3), f"=B{r_fixed}+B{r_var}*A{r}", black_f, _fill(LIGHT_BLUE), _align(), border, "$#,##0")
+        r += 1
+    last_data_row = r - 1
+
+    # Line chart: Revenue & Cost vs Quantity
+    chart = LineChart()
+    chart.title = "Break Even Analysis"
+    chart.style = 2
+    chart.x_axis.title = "Quantity (pints)"
+    chart.y_axis.title = "USD"
+    # Faint gridlines back — B3B3B3 ≈ 30% opacity black on white (openpyxl can't
+    # set a true alpha transform, so this is the render-safe visual equivalent)
+    def _faint_grid():
+        ln = LineProperties(solidFill="B3B3B3", w=9525)  # 0.75pt thin line
+        return ChartLines(spPr=GraphicalProperties(ln=ln))
+    chart.x_axis.majorGridlines = _faint_grid()
+    chart.y_axis.majorGridlines = _faint_grid()
+    # Show numeric axis values (openpyxl hides them unless axes are forced on)
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+    chart.y_axis.tickLblPos = "nextTo"
+    chart.y_axis.numFmt = "$#,##0"
+    chart.height = 11   # larger so title + axis values are legible, not overlapping
+    chart.width  = 21
+    data = Reference(ws, min_col=2, max_col=3, min_row=header_row, max_row=last_data_row)
+    cats = Reference(ws, min_col=1, min_row=first_data_row, max_row=last_data_row)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    ws.add_chart(chart, f"{chart_anchor}{start_row}")
+
+    return last_data_row + 2  # +1 blank row gap
 
 
 # ── Function 2: generate_sensitivity_table ────────────────────────────────────
@@ -203,6 +339,20 @@ def generate_sensitivity_table(ws, start_row,
             ws.cell(row, j).border        = border
             ws.cell(row, j).number_format = "$#,##0"
         row += 1
+
+    # Heatmap — red (loss) → yellow → green (high profit) across the data grid
+    first_data_row = r_corner + 1
+    last_data_row  = r_corner + len(row_series)
+    last_data_col  = get_column_letter(len(col_series) + 1)
+    data_range = f"B{first_data_row}:{last_data_col}{last_data_row}"
+    ws.conditional_formatting.add(
+        data_range,
+        ColorScaleRule(
+            start_type="min",        start_color=RED_BG,
+            mid_type="percentile",   mid_value=50, mid_color="FFFFCC",
+            end_type="max",          end_color=GREEN_BG,
+        )
+    )
 
     row += 1  # blank row
 
@@ -290,7 +440,7 @@ def generate_goal_seek(ws, start_row, fixed_cost, var_cost, avg_price, qty_actua
     ]
     row = write_instructions(ws, row, "HOW TO RUN GOAL SEEK", steps)
 
-    return row
+    return row, ir
 
 
 # ── Function 4a: generate_table_price_qty ────────────────────────────────────
@@ -496,11 +646,20 @@ def export_bsim_excel(fixed_cost, var_cost, avg_price, qty_actual, output_path,
     # Sheet 1: Goal Seek
     ws1 = wb.active
     ws1.title = "Goal Seek - Break Even"
-    generate_goal_seek(ws1, start_row=1,
-                       fixed_cost=fixed_cost,
-                       var_cost=var_cost,
-                       avg_price=avg_price,
-                       qty_actual=qty_actual)
+    row1, ir1 = generate_goal_seek(ws1, start_row=1,
+                                   fixed_cost=fixed_cost,
+                                   var_cost=var_cost,
+                                   avg_price=avg_price,
+                                   qty_actual=qty_actual)
+
+    # Chart-data table + Break Even line chart (dynamic formulas)
+    generate_breakeven_chart_data(ws1, row1, input_rows=ir1,
+                                  qty_actual=qty_actual,
+                                  n_points=n_steps * 2 + 4,
+                                  chart_anchor="E")
+
+    # Business Recommendation block (DRY) — top-right of sheet 1
+    write_recommendation(ws1, start_row=1, anchor_col="E")
 
     # Sheet 2: Data Table (all sensitivity tables stacked)
     ws2 = wb.create_sheet("Data Table - Sensitivity")
@@ -511,6 +670,9 @@ def export_bsim_excel(fixed_cost, var_cost, avg_price, qty_actual, output_path,
                         qty_actual=qty_actual,
                         n_steps=n_steps,
                         pct=pct)
+
+    # Business Recommendation block (DRY) — same position as sheet 1 (E→G, top)
+    write_recommendation(ws2, start_row=1, anchor_col="E")
 
     wb.save(output_path)
     print(f"Saved: {output_path}")
