@@ -312,7 +312,8 @@ def generate_sensitivity_table(ws, start_row,
                                 corner_formula,
                                 col_series, row_series,
                                 col_fmt, row_fmt,
-                                instr_title, instr_steps):
+                                instr_title, instr_steps,
+                                value_fn=None):
     """
     Generic sensitivity table writer.
     Writes: corner formula cell | col_series headers | row_series headers | blank data cells.
@@ -357,19 +358,32 @@ def generate_sensitivity_table(ws, start_row,
             ws.cell(row, j).number_format = "$#,##0"
         row += 1
 
-    # Heatmap — red (loss) → yellow → green (high profit) across the data grid
+    # Heatmap — diverging at ZERO so colour reflects profit/loss, not rank:
+    # reddest at the most-negative, white at break-even (0), greenest at the
+    # most-positive. Anchors are fixed numbers (symmetric around 0) computed
+    # from the profit grid, so the cells colour correctly once Excel fills them.
     first_data_row = r_corner + 1
     last_data_row  = r_corner + len(row_series)
     last_data_col  = get_column_letter(len(col_series) + 1)
     data_range = f"B{first_data_row}:{last_data_col}{last_data_row}"
-    ws.conditional_formatting.add(
-        data_range,
-        ColorScaleRule(
-            start_type="min",        start_color=RED_BG,
-            mid_type="percentile",   mid_value=50, mid_color="FFFFCC",
-            end_type="max",          end_color=GREEN_BG,
+
+    if value_fn is not None:
+        grid  = [value_fn(rv, cv) for rv in row_series for cv in col_series]
+        bound = max(abs(min(grid)), abs(max(grid)))
+        if bound == 0:
+            bound = 1  # avoid a degenerate start==end scale
+        rule = ColorScaleRule(
+            start_type="num", start_value=-bound, start_color="F8696B",  # strong red
+            mid_type="num",   mid_value=0,        mid_color="FFFFFF",     # white at 0
+            end_type="num",   end_value=bound,    end_color="63BE7B",     # strong green
         )
-    )
+    else:
+        rule = ColorScaleRule(
+            start_type="min",      start_color=RED_BG,
+            mid_type="percentile", mid_value=50, mid_color="FFFFCC",
+            end_type="max",        end_color=GREEN_BG,
+        )
+    ws.conditional_formatting.add(data_range, rule)
 
     row += 1  # blank row
 
@@ -462,7 +476,7 @@ def generate_goal_seek(ws, start_row, fixed_cost, var_cost, avg_price, qty_actua
 
 # ── Function 4a: generate_table_price_qty ────────────────────────────────────
 def generate_table_price_qty(ws, start_row, input_rows, avg_price, qty_actual,
-                              n_steps=3, pct=0.10):
+                              n_steps=3, pct=0.10, value_fn=None):
     """
     Table 1: Price x Quantity.
     Rows = price series, Columns = qty series.
@@ -498,13 +512,14 @@ def generate_table_price_qty(ws, start_row, input_rows, avg_price, qty_actual,
         col_fmt="#,##0",
         row_fmt="$#,##0.00",
         instr_title="HOW TO RUN DATA TABLE — Table 1: Price x Quantity",
-        instr_steps=steps
+        instr_steps=steps,
+        value_fn=value_fn
     )
 
 
 # ── Function 4b: generate_table_cost_qty ─────────────────────────────────────
 def generate_table_cost_qty(ws, start_row, input_rows, var_cost, qty_actual,
-                             n_steps=3, pct=0.10):
+                             n_steps=3, pct=0.10, value_fn=None):
     """
     Table 2: Cost x Quantity.
     Rows = var_cost series, Columns = qty series.
@@ -540,13 +555,14 @@ def generate_table_cost_qty(ws, start_row, input_rows, var_cost, qty_actual,
         col_fmt="#,##0",
         row_fmt="$#,##0.00",
         instr_title="HOW TO RUN DATA TABLE — Table 2: Cost x Quantity",
-        instr_steps=steps
+        instr_steps=steps,
+        value_fn=value_fn
     )
 
 
 # ── Function 4c: generate_table_price_cost ───────────────────────────────────
 def generate_table_price_cost(ws, start_row, input_rows, avg_price, var_cost,
-                               n_steps=3, pct=0.10):
+                               n_steps=3, pct=0.10, value_fn=None):
     """
     Table 3: Price x Cost.
     Rows = var_cost series, Columns = price series.
@@ -582,7 +598,8 @@ def generate_table_price_cost(ws, start_row, input_rows, avg_price, var_cost,
         col_fmt="$#,##0.00",
         row_fmt="$#,##0.00",
         instr_title="HOW TO RUN DATA TABLE — Table 3: Price x Cost",
-        instr_steps=steps
+        instr_steps=steps,
+        value_fn=value_fn
     )
 
 
@@ -616,12 +633,18 @@ def generate_data_table(ws, start_row, fixed_cost, var_cost, avg_price, qty_actu
         ("qty",   "Total Quantity Sold (pints)",  qty_actual, "#,##0",     "<- Mid value for Qty series"),
     ])
 
+    # Profit grids (row_value, col_value) → drive the diverging heatmap anchors.
+    # Profit = (price - var_cost) * qty - fixed_cost, with the two held inputs.
+    fn_price_qty = lambda price, qty:  (price - var_cost) * qty       - fixed_cost
+    fn_cost_qty  = lambda cost,  qty:  (avg_price - cost)  * qty       - fixed_cost
+    fn_price_cost = lambda cost, price: (price - cost)     * qty_actual - fixed_cost
+
     # ── Table 1: Price x Quantity ─────────────────────────────────────────────
     row = generate_table_price_qty(
         ws, row,
         input_rows=input_rows,
         avg_price=avg_price, qty_actual=qty_actual,
-        n_steps=n_steps, pct=pct
+        n_steps=n_steps, pct=pct, value_fn=fn_price_qty
     )
 
     # ── Table 2: Cost x Quantity ──────────────────────────────────────────────
@@ -629,7 +652,7 @@ def generate_data_table(ws, start_row, fixed_cost, var_cost, avg_price, qty_actu
         ws, row,
         input_rows=input_rows,
         var_cost=var_cost, qty_actual=qty_actual,
-        n_steps=n_steps, pct=pct
+        n_steps=n_steps, pct=pct, value_fn=fn_cost_qty
     )
 
     # ── Table 3: Price x Cost ─────────────────────────────────────────────────
@@ -637,7 +660,7 @@ def generate_data_table(ws, start_row, fixed_cost, var_cost, avg_price, qty_actu
         ws, row,
         input_rows=input_rows,
         avg_price=avg_price, var_cost=var_cost,
-        n_steps=n_steps, pct=pct
+        n_steps=n_steps, pct=pct, value_fn=fn_price_cost
     )
 
     return row
