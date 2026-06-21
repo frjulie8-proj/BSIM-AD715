@@ -19,6 +19,7 @@ from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.chart import LineChart, Reference
 from openpyxl.chart.axis import ChartLines
 from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.chart.layout import Layout, ManualLayout
 from openpyxl.drawing.line import LineProperties
 from openpyxl.formatting.rule import ColorScaleRule
 
@@ -219,7 +220,8 @@ def generate_breakeven_series(qty_actual, n_points=10, frac=1.2):
 
 # ── Function 1c: generate_breakeven_chart_data ────────────────────────────────
 def generate_breakeven_chart_data(ws, start_row, input_rows, qty_actual,
-                                  n_points=10, frac=1.2, chart_anchor="E"):
+                                  n_points=10, frac=1.2, chart_anchor="E",
+                                  chart_row=None):
     """
     Writes the Break Even chart-data table (Quantity | Revenue | Cost) with
     fully dynamic formulas referencing the shared INPUTS, then draws a line chart.
@@ -266,10 +268,10 @@ def generate_breakeven_chart_data(ws, start_row, input_rows, qty_actual,
     chart.style = 2
     chart.x_axis.title = "Quantity (pints)"
     chart.y_axis.title = "USD"
-    # Faint gridlines back — B3B3B3 ≈ 30% opacity black on white (openpyxl can't
-    # set a true alpha transform, so this is the render-safe visual equivalent)
+    # Faint gridlines — F2F2F2 ≈ 5% opacity black on white (openpyxl can't set a
+    # true alpha transform, so this is the render-safe visual equivalent)
     def _faint_grid():
-        ln = LineProperties(solidFill="B3B3B3", w=9525)  # 0.75pt thin line
+        ln = LineProperties(solidFill="F2F2F2", w=9525)  # 0.75pt thin line
         return ChartLines(spPr=GraphicalProperties(ln=ln))
     chart.x_axis.majorGridlines = _faint_grid()
     chart.y_axis.majorGridlines = _faint_grid()
@@ -279,13 +281,28 @@ def generate_breakeven_chart_data(ws, start_row, input_rows, qty_actual,
     chart.x_axis.tickLblPos = "low"
     chart.y_axis.tickLblPos = "nextTo"
     chart.y_axis.numFmt = "$#,##0"
-    chart.height = 11   # larger so title + axis values are legible, not overlapping
+    # Legend at the bottom so the plot uses the full width (no right-side blank).
+    chart.legend.position = "b"
+    chart.legend.overlay = False
+    # Reserve left/bottom margins so axis TITLES don't overlap tick labels.
+    # openpyxl draws no auto-layout, so without this the titles sit on the data.
+    # NOTE: must set chart.layout (not plot_area.layout) — _write() copies
+    # chart.layout into plot_area at save time, clobbering the latter.
+    chart.layout = Layout(
+        manualLayout=ManualLayout(
+            xMode="edge", yMode="edge",
+            x=0.10, y=0.08,   # plot starts 10% from left, 8% from top (title room)
+            w=0.88, h=0.74,   # fills width; ~18% bottom band for labels+title
+        )
+    )
+    chart.height = 11
     chart.width  = 21
     data = Reference(ws, min_col=2, max_col=3, min_row=header_row, max_row=last_data_row)
     cats = Reference(ws, min_col=1, min_row=first_data_row, max_row=last_data_row)
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(cats)
-    ws.add_chart(chart, f"{chart_anchor}{start_row}")
+    anchor_row = chart_row if chart_row is not None else start_row
+    ws.add_chart(chart, f"{chart_anchor}{anchor_row}")
 
     return last_data_row + 2  # +1 blank row gap
 
@@ -656,7 +673,7 @@ def export_bsim_excel(fixed_cost, var_cost, avg_price, qty_actual, output_path,
     generate_breakeven_chart_data(ws1, row1, input_rows=ir1,
                                   qty_actual=qty_actual,
                                   n_points=n_steps * 2 + 4,
-                                  chart_anchor="E")
+                                  chart_anchor="E", chart_row=19)
 
     # Business Recommendation block (DRY) — top-right of sheet 1
     write_recommendation(ws1, start_row=1, anchor_col="E")
